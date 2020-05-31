@@ -2,8 +2,14 @@
 *.jpg
 *.jpeg
 *.png
+
+# videos
+*.mp4
+*.mov
+
 # data files
 *.csv
+
 # python cache
 *__pycache__*
 *.pyc

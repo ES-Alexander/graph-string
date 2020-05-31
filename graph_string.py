@@ -3,30 +3,10 @@
 import numpy as np
 from scipy import interpolate
 from matplotlib import pyplot as plt
-
-class GraphCharacter:
-    ''' A class for storing a single character to be graphed. '''
-    def __init__(self, lines):
-        ''' A single character for graphing, defined by points.
-
-        'lines' is a list of lines, each of which is an array of [x,y] pairs,
-            where x and y are each bounded by [0,1], and the first and last
-            point of each line should be [0,0] and [1,0] respectively. This is
-            not enforced, and allows for potential overlapping of characters as
-            desired. It is generally expected that the tallest line will be
-            first, and the lowest line last.
-
-        Constructor: GraphCharacter(list[np.array(float(x2))])
-
-        '''
-        self.lines = lines
-
-    def __len__(self):
-        return len(self.lines)
-
+from matplotlib.animation import FuncAnimation
 
 class GraphString:
-    ''' A class for storing strings of GraphCharacter instances. '''
+    ''' A class for storing graphable strings. '''
     CHAR_LINES = {
         ' ': [np.array([[0,0], [1,0]])],
         '/': [
@@ -107,7 +87,7 @@ class GraphString:
                 [1   , 0   ],
             ]), np.array([
                 [0   , 0   ],
-                [0   , 0.56],
+                [0.01, 0.56],
                 [0.33, 0.6 ],
                 [0.34, 0.8 ],
                 [0.53, 0.8 ],
@@ -350,7 +330,7 @@ class GraphString:
 				[0.01, 0.01],
 				[0.02, 0.54],
 				[0.37, 0.57],
-				[0.37, 0.79],
+				[0.38, 0.79],
 				[0.52, 0.79],
 				[0.59, 0.77],
 				[0.63, 0.73],
@@ -391,7 +371,7 @@ class GraphString:
 				[0.91, 0.72],
 				[1.00, 0.00],
 			]), np.array([
-				[0.01, 0.00],
+				[0.  , 0.00],
 				[0.01, 0.57],
 				[0.32, 0.60],
 				[0.32, 0.79],
@@ -465,7 +445,7 @@ class GraphString:
 				[0.35, 0.42],
 				[0.36, 0.00],
 				[0.64, 0.00],
-				[0.64, 0.41],
+				[0.65, 0.41],
 				[0.99, 1.00],
 				[1.00, -0.00],
 			]), 
@@ -527,36 +507,103 @@ class GraphString:
             for axis_index, axis in enumerate(line):
                 axis.extend(new_line[:,axis_index])
 
-    def plot(self, mode='linear', animated=False, crop_width=None,
-             taper=None, fourier=False, interpolation=None, resolution=None,
-             **kwargs):
+    def plot(self, interpolation=None, resolution=None, **kwargs):
         ''' Display the string on a graph. '''
-        # TODO circular, animated, crop_width, taper, fourier,
-        for line in self._graph_lines:
+        self._plot_lines = []
+        for index, line in enumerate(self._graph_lines):
             x,y = line
             if interpolation:
-                f = interpolate.interp1d(x, y, kind='linear', fill_value=0,
-                                         bounds_error=False)
-                x = np.arange(x[0], x[-1]+5e-2, 5e-2)
-                y = f(x)
-                f = interpolate.interp1d(x, y, kind=interpolation,
-                                         fill_value='extrapolate')
-                x = np.arange(x[0], x[-1]+resolution, resolution)
-                y = f(x)
+                x,y = self.interpolate(x, y, interpolation, resolution)
 
-            plt.plot(x, y, **kwargs)
+            self._plot_lines.append(plt.plot(x, y, **kwargs)[0])
+        plt.axis('off')
+        plt.axis('equal')
+        plt.tight_layout()
+
+    def interpolate(self, x, y, kind, resolution):
+        ''' Interpolate the line data, return interpolated x and y. '''
+        # interpolate linearly first, to avoid huge deviations from
+        #   intended path
+        linear_res = 5 * resolution
+        f = interpolate.interp1d(x, y, kind='linear', fill_value=0,
+                                 bounds_error=False)
+        x = np.arange(x[0], x[-1]+linear_res, linear_res)
+        y = f(x)
+        # now apply desired interpolation
+        f = interpolate.interp1d(x, y, kind=kind, fill_value='extrapolate')
+        x = np.arange(x[0], x[-1]+resolution, resolution)
+        y = f(x)
+        return x, y
+
+    def animate(self, display_chars='all', taper=None, filename=None, speed=10,
+                interpolation='cubic', resolution=1e-2, **kwargs):
+        ''' Create and play an animation.
+
+        'display_chars' is the number of characters to show at a time. If left
+            as 'all', displays all the characters simultaneously.
+        'taper' specifies if the ends should be tapered to ensure a periodic
+            boundary (useful for circular=True).
+        'filename' specifies an optional file to save the animation to.
+
+        '''
+        fig = plt.figure('GraphString')
+        self.plot(interpolation=interpolation, resolution=resolution)
+        x = self._graph_lines[0][0]
+        full_width = x[-1] - x[0]
+        if display_chars == 'all':
+            crop_width = full_width
+        else:
+            crop_width = display_chars * (self.char_width + self.char_spacing)\
+                - self.char_spacing
+
+        # double each line to animate more easily
+        lines = []
+        for index, line in enumerate(self._graph_lines):
+            data = []
+            x, y = line
+            first = x[0]
+            last = x[-1]
+            x += [val+last-first for val in x]
+            y += y
+            x,y = self.interpolate(x,y,interpolation,resolution)
+            data = np.array([x,y])
+            lines.append(data)
+            self._plot_lines[index].set_data(data[:, data[0] < crop_width])
+
+        ax = fig.axes[0]
+        ax.set_xlim(left=0, right=crop_width)
+        plt.axis('equal')
+
+        num_frames = int((full_width) // (speed * resolution))
+        if taper:
+            logistic = 1 / (1 + np.exp(-8/taper*(np.arange(taper)-taper/2)))
+            reverse = logistic[::-1]
+
+        def update(frame):
+            start = (frame % (num_frames)) * speed * resolution
+            end = start + crop_width
+            x = lines[0][0]
+            region = (start <= x) & (x <= end)
+            for index, line in enumerate(self._plot_lines):
+                x,y = lines[index]
+                y_out = y[region]
+                if taper:
+                    y_out[:taper] *= logistic
+                    y_out[-taper:] *= reverse
+                line.set_data(x[region]-start, y_out)
+            return self._plot_lines
+
+        self.anim = FuncAnimation(fig, update, frames=num_frames, interval=30,
+                                  blit=True)
+
+        if filename:
+            self.anim.save(filename, fps=33, extra_args=['-vcodec', 'libx264'])
 
 
 if __name__ == '__main__':
-    test = GraphString(' HAPPY BIRTHDAY OLI! ')
-    plt.figure('test')
-    test.plot()
-    plt.axis('equal')
-    #plt.show()
-
-    plt.figure('test2')
-    test.plot(interpolation='cubic', resolution=1e-2)
-    plt.axis('equal')
+    message = ' HAPPY BIRTHDAY OLI! '
+    test = GraphString(' '*len(message) + message)
+    test.animate(display_chars=21, taper=200, filename='HB.mp4')
     plt.show()
 
 
